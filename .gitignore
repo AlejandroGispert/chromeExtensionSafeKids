@@ -1,13 +1,1 @@
-node_modules
-venv
-tmp
-videos.db
-.env
 .vscode
-.DS_Store
-.cursorrules
-.cursorignore
-package-lock.json
-pnpm-lock.yaml
-pnpm-workspace.yaml
-pnpm-workspace.yaml

@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Kidsafe - YouTube Content Safety Checker",
+  "version": "1.0.0",
+  "description": "Automatically checks YouTube videos for inappropriate content using AI",
+  "permissions": ["activeTab", "storage"],
+  "host_permissions": ["http://localhost:4000/*", "https://www.youtube.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "js": ["content.js"],
+      "css": ["styles.css"]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}

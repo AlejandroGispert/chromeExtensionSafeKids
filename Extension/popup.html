@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Kidsafe</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>🛡️ Kidsafe</h1>
+        <p class="subtitle">YouTube Content Safety Checker</p>
+      </div>
+
+      <div id="status" class="status">
+        <div class="status-icon">⏳</div>
+        <div class="status-text">Checking current video...</div>
+      </div>
+
+      <div id="details" class="details hidden">
+        <div class="detail-section">
+          <h3>Safety Status</h3>
+          <div id="safety-status" class="safety-status"></div>
+        </div>
+
+        <div id="reasons-section" class="detail-section hidden">
+          <h3>Detected Issues</h3>
+          <ul id="reasons-list"></ul>
+        </div>
+
+        <div class="detail-section">
+          <h3>Video Info</h3>
+          <div id="video-info" class="video-info"></div>
+        </div>
+      </div>
+
+      <div id="error" class="error hidden">
+        <div class="error-icon">❌</div>
+        <div class="error-text"></div>
+        <div class="error-hint">
+          Make sure the Kidsafe backend is running on
+          <code>http://localhost:4000</code>
+        </div>
+      </div>
+
+      <div class="footer">
+        <button id="refresh-btn" class="btn">🔄 Refresh Check</button>
+      </div>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
