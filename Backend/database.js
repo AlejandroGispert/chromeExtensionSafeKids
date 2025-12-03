@@ -1,0 +1,108 @@
+/* eslint-env node */
+
+const sqlite3 = require("sqlite3").verbose();
+const fs = require("fs-extra");
+const path = require("path");
+const { DB_PATH } = require("./config");
+
+// Ensure database directory exists
+const dbDir = path.dirname(DB_PATH);
+if (!fs.existsSync(dbDir)) {
+	fs.ensureDirSync(dbDir);
+}
+
+// Check if database exists, if not create it
+const dbExists = fs.existsSync(DB_PATH);
+if (!dbExists) {
+	console.log("📝 Database file not found, creating new database...");
+}
+
+// Initialize database (OPEN_CREATE ensures it's created if it doesn't exist)
+const db = new sqlite3.Database(
+	DB_PATH,
+	sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE,
+	(err) => {
+		if (err) {
+			console.error("❌ Database connection error:", err.message);
+			process.exit(1);
+		}
+		
+		if (!dbExists) {
+			console.log("✅ New database created");
+		} else {
+			console.log("✅ Database connected");
+		}
+
+		// Ensure database file has write permissions
+		try {
+			fs.chmodSync(DB_PATH, 0o666);
+		} catch (chmodErr) {
+			console.warn("⚠️ Could not set database permissions:", chmodErr.message);
+		}
+	}
+);
+
+// Create tables
+db.run(
+	`
+	CREATE TABLE IF NOT EXISTS videos (
+		videoId TEXT PRIMARY KEY,
+		safe INTEGER,
+		reasons TEXT,
+		scannedAt TEXT,
+		scanStatus TEXT
+	)
+`,
+	(err) => {
+		if (err) {
+			console.error("❌ Database table creation error:", err.message);
+		}
+	}
+);
+
+// Add scanStatus column to existing databases (migration)
+db.run("ALTER TABLE videos ADD COLUMN scanStatus TEXT DEFAULT NULL", (err) => {
+	// Ignore error if column already exists
+	if (err && !err.message.includes("duplicate column")) {
+		console.warn(
+			"⚠️ Could not add scanStatus column (may already exist):",
+			err.message
+		);
+	}
+});
+
+// Database helper functions
+const dbHelpers = {
+	get: (query, params) => {
+		return new Promise((resolve, reject) => {
+			db.get(query, params, (err, row) => {
+				if (err) reject(err);
+				else resolve(row);
+			});
+		});
+	},
+
+	run: (query, params) => {
+		return new Promise((resolve, reject) => {
+			db.run(query, params, function (err) {
+				if (err) reject(err);
+				else resolve({ lastID: this.lastID, changes: this.changes });
+			});
+		});
+	},
+
+	close: () => {
+		return new Promise((resolve, reject) => {
+			db.close((err) => {
+				if (err) reject(err);
+				else resolve();
+			});
+		});
+	},
+};
+
+module.exports = {
+	db,
+	dbHelpers,
+};
+

@@ -289,11 +289,11 @@ function startPollingForUpdates(videoId) {
 	pollingVideoId = videoId;
 	console.log(`🔄 Starting polling for video ${videoId} to check for full scan completion`);
 	
-	// Poll every 15 seconds
+	// Poll every 2 seconds for immediate blocking when Phase 2/3 finds unsafe content
 	pollingInterval = setInterval(async () => {
 		// Check if we're still on the same video
 		if (getVideoId() !== pollingVideoId || pollingVideoId !== currentVideoId) {
-			console.log(`🛑 Stopping polling - video changed`);
+			console.log("🛑 Stopping polling - video changed");
 			stopPolling();
 			return;
 		}
@@ -308,26 +308,39 @@ function startPollingForUpdates(videoId) {
 			if (response && response.success) {
 				const data = response.data;
 				
-				// If scan is complete (not preliminary anymore)
-				if (data.scanType !== "preliminary" && !data.scanning) {
-					console.log(`✅ Full scan complete for ${pollingVideoId}`);
+				// If unsafe content found (in any phase), block immediately
+				if (!data.safe) {
+					console.log(`🚫 Unsafe content detected for ${pollingVideoId}, blocking immediately`);
 					stopPolling();
-					
-					// Update badge
-					if (!data.safe) {
-						// Unsafe content found in full scan
-						removeBlockingOverlay();
-						createBlockingOverlay(data.reasons || []);
-					} else {
-						// Full scan confirms safe
-						createSafetyBadge(pollingVideoId, "safe");
-					}
+					removeBlockingOverlay();
+					createBlockingOverlay(data.reasons || []);
 					
 					// Update storage
 					chrome.storage.local.set({
 						[`video_${pollingVideoId}`]: {
-							safe: data.safe,
+							safe: false,
 							reasons: data.reasons,
+							cached: data.cached,
+							scanType: data.scanType,
+							timestamp: Date.now(),
+						},
+					});
+					return;
+				}
+				
+				// If scan is complete (not preliminary anymore) and still safe
+				if (data.scanType !== "preliminary" && !data.scanning) {
+					console.log(`✅ Full scan complete for ${pollingVideoId}`);
+					stopPolling();
+					
+					// Full scan confirms safe
+					createSafetyBadge(pollingVideoId, "safe");
+					
+					// Update storage
+					chrome.storage.local.set({
+						[`video_${pollingVideoId}`]: {
+							safe: true,
+							reasons: data.reasons || [],
 							cached: data.cached,
 							scanType: data.scanType,
 							timestamp: Date.now(),
@@ -339,7 +352,7 @@ function startPollingForUpdates(videoId) {
 			console.error("Kidsafe polling error:", error);
 			// Continue polling on error
 		}
-	}, 15000); // Poll every 15 seconds
+	}, 2000); // Poll every 2 seconds for immediate blocking
 }
 
 function stopPolling() {
@@ -347,7 +360,7 @@ function stopPolling() {
 		clearInterval(pollingInterval);
 		pollingInterval = null;
 		pollingVideoId = null;
-		console.log(`🛑 Stopped polling`);
+		console.log("🛑 Stopped polling");
 	}
 }
 
