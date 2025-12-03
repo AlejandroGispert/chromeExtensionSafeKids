@@ -78,9 +78,31 @@ async function downloadVideo(videoId) {
 		throw new Error("Video file is empty (0 bytes) - download may have failed");
 	}
 	
-	if (stats.size < 10000) {
-		// Less than 10KB is suspicious for a video file
-		console.warn(`⚠️ Video file is very small (${stats.size} bytes), may be corrupted`);
+	// Validate video file with ffprobe to ensure it's not corrupted
+	try {
+		const { execSync } = require("child_process");
+		const probeOutput = execSync(
+			`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${VIDEO_PATH}"`,
+			{ timeout: 10000, stdio: "pipe" }
+		).toString().trim();
+		
+		const duration = parseFloat(probeOutput);
+		if (!duration || duration <= 0 || isNaN(duration)) {
+			throw new Error("Video file appears corrupted (invalid duration)");
+		}
+		
+		// Check if file size is reasonable for the duration
+		// Minimum ~50KB per minute is reasonable for low quality video
+		const minExpectedSize = duration * 50 * 1024; // 50KB per minute
+		if (stats.size < minExpectedSize) {
+			console.warn(
+				`⚠️ Video file is suspiciously small (${(stats.size / 1024).toFixed(1)}KB) for ${duration.toFixed(1)}s duration`
+			);
+			// Don't throw, but warn - might still work
+		}
+	} catch (probeErr) {
+		// If ffprobe fails, the file is likely corrupted
+		throw new Error(`Video file validation failed: ${probeErr.message}. File may be corrupted.`);
 	}
 
 	return true;
@@ -111,9 +133,9 @@ function extractFrames() {
 	try {
 		// OPTIMIZATION: Extract 1 frame every 15 seconds, max 30 frames (was 10s/50 frames)
 		// This is 3x faster while still providing good coverage
-		// Use -err_detect ignore_err to continue even if file has minor issues
+		// Use -err_detect ignore_err and -fflags +genpts to handle partial/corrupted files better
 		execSync(
-			"ffmpeg -err_detect ignore_err -i tmp/preview.mp4 -vf \"fps=1/15\" -frames:v 30 tmp/frame_%03d.jpg -y",
+			"ffmpeg -err_detect ignore_err -fflags +genpts+discardcorrupt -i tmp/preview.mp4 -vf \"fps=1/15\" -frames:v 30 tmp/frame_%03d.jpg -y",
 			{
 				stdio: "inherit",
 				timeout: TIMEOUTS.FRAME_EXTRACTION,
@@ -124,14 +146,31 @@ function extractFrames() {
 		const tmpDir = require("./config").TMP_DIR;
 		const frameFiles = fs.readdirSync(tmpDir).filter(f => f.startsWith("frame_") && f.endsWith(".jpg"));
 		if (frameFiles.length === 0) {
-			throw new Error("No frames were extracted from video (file may be corrupted)");
+			// Try alternative extraction method for corrupted files
+			console.warn("⚠️ No frames extracted with standard method, trying alternative...");
+			try {
+				execSync(
+					"ffmpeg -err_detect ignore_err -fflags +genpts+discardcorrupt -analyzeduration 10000000 -probesize 10000000 -i tmp/preview.mp4 -vf \"fps=1/15\" -frames:v 30 tmp/frame_%03d.jpg -y",
+					{
+						stdio: "inherit",
+						timeout: TIMEOUTS.FRAME_EXTRACTION,
+					}
+				);
+				const retryFrames = fs.readdirSync(tmpDir).filter(f => f.startsWith("frame_") && f.endsWith(".jpg"));
+				if (retryFrames.length === 0) {
+					throw new Error("No frames could be extracted - video file is too corrupted");
+				}
+				console.log(`✅ Extracted ${retryFrames.length} frames (using fallback method)`);
+			} catch (retryErr) {
+				throw new Error("No frames were extracted from video (file may be corrupted or incomplete)");
+			}
+		} else {
+			console.log(`✅ Extracted ${frameFiles.length} frames`);
 		}
-		
-		console.log(`✅ Extracted ${frameFiles.length} frames`);
 	} catch (ffmpegErr) {
 		// Check if it's a partial file error
-		if (ffmpegErr.message && ffmpegErr.message.includes("partial file")) {
-			throw new Error("Video file is incomplete or corrupted. Try downloading again.");
+		if (ffmpegErr.message && (ffmpegErr.message.includes("partial file") || ffmpegErr.message.includes("Invalid data"))) {
+			throw new Error("Video file is incomplete or corrupted. The download may have failed. Try scanning again.");
 		}
 		throw new Error(
 			`Frame extraction failed: ${ffmpegErr.message || "Unknown error"}`

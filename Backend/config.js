@@ -34,10 +34,12 @@ const AUDIO_DOWNLOAD_COMMANDS = (videoId) => [
 ];
 
 const VIDEO_DOWNLOAD_COMMANDS = (videoId) => [
-	`yt-dlp -f "bv*[height<=360]/bv*" -o tmp/preview.mp4 --no-warnings --extractor-args "youtube:player_client=android" https://www.youtube.com/watch?v=${videoId}`,
-	`yt-dlp -f "bv*[height<=360]/bv*" -o tmp/preview.mp4 --no-warnings --extractor-args "youtube:player_client=ios" https://www.youtube.com/watch?v=${videoId}`,
-	`yt-dlp -f "best[height<=360]/worst" -o tmp/preview.mp4 --no-warnings --extractor-args "youtube:player_client=web" https://www.youtube.com/watch?v=${videoId}`,
-	`yt-dlp -f "best[height<=360]/worst" -o tmp/preview.mp4 --no-warnings https://www.youtube.com/watch?v=${videoId}`,
+	// Ensure we get video+audio or video-only (not audio-only)
+	// Format codes: bv = best video, ba = best audio, b = best (video+audio)
+	`yt-dlp -f "bv*[height<=360]+ba/bv*[height<=360]/best[height<=360][ext=mp4]/worst[ext=mp4]" -o tmp/preview.mp4 --no-warnings --extractor-args "youtube:player_client=android" https://www.youtube.com/watch?v=${videoId}`,
+	`yt-dlp -f "bv*[height<=360]+ba/bv*[height<=360]/best[height<=360][ext=mp4]/worst[ext=mp4]" -o tmp/preview.mp4 --no-warnings --extractor-args "youtube:player_client=ios" https://www.youtube.com/watch?v=${videoId}`,
+	`yt-dlp -f "bv*[height<=360]+ba/bv*[height<=360]/best[height<=360][ext=mp4]/worst[ext=mp4]" -o tmp/preview.mp4 --no-warnings --extractor-args "youtube:player_client=web" https://www.youtube.com/watch?v=${videoId}`,
+	`yt-dlp -f "bv*[height<=360]+ba/bv*[height<=360]/best[height<=360][ext=mp4]/worst[ext=mp4]" -o tmp/preview.mp4 --no-warnings https://www.youtube.com/watch?v=${videoId}`,
 ];
 
 module.exports = {

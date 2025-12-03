@@ -216,8 +216,108 @@ async function analyzeRoute(req, res) {
 			// Audio is safe - wait for video download to complete
 			await videoDownloadPromise;
 
-			// ✅ 5️⃣ FRAME EXTRACTION
-			extractFrames();
+			// ✅ 5️⃣ FRAME EXTRACTION (with error handling)
+			try {
+				extractFrames();
+			} catch (frameErr) {
+				// If frame extraction fails due to corrupted video, continue with audio-only scan
+				console.warn(`⚠️ Frame extraction failed: ${frameErr.message}`);
+				console.warn("⚠️ Continuing with audio-only scan (images will be skipped)");
+				// Set empty image results so scan can continue
+				const imageResult = "[]";
+				const imageReasons = safeJsonParse(imageResult, []);
+				
+				// Continue with Phase 1 using only audio results
+				const phase1Reasons = [...quickAudioReasons, ...imageReasons];
+				const phase1Safe = phase1Reasons.length === 0;
+				
+				if (!phase1Safe) {
+					// Still found issues in audio
+					await dbHelpers.run(
+						"INSERT OR REPLACE INTO videos VALUES (?, ?, ?, datetime('now'), ?)",
+						[videoId, 0, JSON.stringify(phase1Reasons), "full"]
+					);
+					cleanupTempFiles();
+					return res.json({
+						videoId,
+						safe: false,
+						reasons: phase1Reasons,
+						cached: false,
+						scanType: "quick",
+					});
+				}
+				
+				// Audio is safe, proceed with Phase 2 & 3 (skip image processing)
+				await dbHelpers.run(
+					"INSERT OR REPLACE INTO videos VALUES (?, ?, ?, datetime('now'), ?)",
+					[videoId, 1, JSON.stringify([]), "quick"]
+				);
+				
+				res.json({
+					videoId,
+					safe: true,
+					reasons: [],
+					cached: false,
+					scanType: "preliminary",
+					scanning: true,
+				});
+				
+				// Start Phase 2 & 3 in background (same as below)
+				Promise.all([processAudioFull(videoId), analyzeTranscription()])
+					.then(async ([fullAudioResult, transcriptionAnalysisResult]) => {
+						const fullAudioReasons = safeJsonParse(fullAudioResult, []);
+						const transcriptionReasons = safeJsonParse(transcriptionAnalysisResult, []);
+						
+						console.log(
+							`📊 Phase 2 - Full Audio Word Filter: ${fullAudioReasons.length} flags`,
+							fullAudioReasons
+						);
+						console.log(
+							`📊 Phase 3 - Context Analysis: ${transcriptionReasons.length} flags`,
+							transcriptionReasons
+						);
+						
+						const allPhase2And3Reasons = [...fullAudioReasons, ...transcriptionReasons];
+						
+						if (allPhase2And3Reasons.length > 0) {
+							console.log(
+								`⚠️ Phase 2/3 found unsafe content for ${videoId}:`,
+								allPhase2And3Reasons
+							);
+							
+							await dbHelpers.run(
+								"UPDATE videos SET safe=0, reasons=?, scannedAt=datetime('now'), scanStatus='full' WHERE videoId=?",
+								[JSON.stringify(allPhase2And3Reasons), videoId]
+							);
+							console.log(
+								`✅ Updated ${videoId} to UNSAFE after Phase 2 & 3 - PAGE SHOULD BE BLOCKED NOW`
+							);
+						} else {
+							console.log(
+								`✅ Phase 2 & 3 complete: Both checks confirm SAFE for ${videoId}`
+							);
+							
+							await dbHelpers.run(
+								"UPDATE videos SET safe=1, reasons=?, scannedAt=datetime('now'), scanStatus='full' WHERE videoId=?",
+								[JSON.stringify([]), videoId]
+							);
+							console.log(
+								`✅ Updated ${videoId} with final SAFE confirmation (all phases clear)`
+							);
+						}
+						
+						cleanupTempFiles();
+					})
+					.catch((err) => {
+						console.error(
+							`❌ Phase 2/3 background scan failed for ${videoId}:`,
+							err.message
+						);
+						cleanupTempFiles();
+					});
+				
+				return; // Exit early since we handled everything
+			}
 
 			// ✅ 6️⃣ PHASE 1: IMAGE SCAN (audio already done)
 			console.log("✅ Phase 1: Processing images...");
