@@ -81,6 +81,17 @@ function completeFullScanOnly(videoId, existingImageReasons) {
 			})
 			.catch((err) => {
 				console.error(`❌ Phase 2/3 failed for ${videoId}:`, err.message);
+				// SAFETY: If scan is interrupted, delete the result so it can be rescanned
+				dbHelpers
+					.run("DELETE FROM videos WHERE videoId=?", [videoId])
+					.then(() => {
+						console.log(
+							`⚠️ Deleted ${videoId} from database due to interrupted scan - will rescan next time`
+						);
+					})
+					.catch((dbErr) => {
+						console.error("❌ Database delete error:", dbErr.message);
+					});
 				reject(err);
 				cleanupTempFiles();
 			});

@@ -36,20 +36,44 @@ result = model.transcribe(
 # Get transcription text
 text = result["text"].lower()
 
-# Expanded list of inappropriate words/phrases
+# Expanded list of inappropriate words/phrases (including suicide, self-harm, etc.)
 bad_words = [
     "fuck", "fucking", "fucked", "shit", "shitting", "sex", "sexual", "cocaine", 
     "marijuana", "weed", "drug", "kill", "killing", "killed", "pedo", "pedophile",
     "ass", "bitch", "damn", "hell", "porn", "pornography", "nude", "naked",
-    "violence", "violent", "gun", "shoot", "shooting", "murder", "death", "die"
+    "violence", "violent", "gun", "shoot", "shooting", "murder", "death", "die",
+    "suicide", "suicidal", "kill myself", "end my life", "self harm", "self-harm",
+    "cutting", "cut myself", "hang myself", "overdose", "overdosing"
 ]
 
+# Scream detection patterns
+scream_patterns = [
+    r'\b(ah+|ahh+|ahhh+|ahhhh+|aah+|aaah+|aaaah+)\b',  # Repeated "ah" sounds
+    r'\b(no+|noo+|nooo+|noooo+)\b',  # Repeated "no" (distress)
+    r'\b(help|help me|somebody help)\b',  # Help calls
+    r'\b(scream|screaming|screamed|screams)\b',  # Explicit scream words
+    r'\b(aa+|ee+|ii+|oo+|uu+)\b',  # Long vowel sounds (screams)
+]
+
+import re
+
 flags = []
+
+# 1. Check for inappropriate words
 for w in bad_words:
-    # Use word boundaries to avoid false positives (e.g., "class" containing "ass")
-    import re
+    # Use word boundaries to avoid false positives
     pattern = r'\b' + re.escape(w) + r'\b'
-    if re.search(pattern, text):
+    if re.search(pattern, text, re.IGNORECASE):
         flags.append(f"inappropriate language: {w}")
+
+# 2. Scream detection (more thorough in 2-minute scan)
+scream_count = 0
+for pattern in scream_patterns:
+    matches = re.findall(pattern, text, re.IGNORECASE)
+    scream_count += len(matches)
+
+# If multiple scream indicators found, flag it
+if scream_count >= 3:
+    flags.append(f"screams detected in audio ({scream_count} instances)")
 
 print(json.dumps(flags))

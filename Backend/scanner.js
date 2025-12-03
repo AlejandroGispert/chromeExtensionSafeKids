@@ -3,6 +3,36 @@
 const { execSync } = require("child_process");
 const { pythonCmd, TIMEOUTS } = require("./config");
 
+// Process thumbnail (before any downloads)
+function processThumbnail(thumbnailUrl) {
+	return new Promise((resolve) => {
+		let thumbnailResult = "[]";
+		try {
+			if (!thumbnailUrl) {
+				resolve(thumbnailResult);
+				return;
+			}
+			
+			const output = execSync(`"${pythonCmd}" thumbnail_scan.py "${thumbnailUrl}"`, {
+				stdio: "pipe",
+				timeout: 30000, // 30 second timeout
+				cwd: __dirname,
+			}).toString();
+			
+			thumbnailResult = output;
+			console.log(
+				"📝 Thumbnail scan output (first 200 chars):",
+				output.substring(0, 200)
+			);
+		} catch (thumbErr) {
+			console.error("⚠️ Thumbnail scan error:", thumbErr.message);
+			// Don't fail the whole scan if thumbnail fails
+			thumbnailResult = "[]";
+		}
+		resolve(thumbnailResult);
+	});
+}
+
 // Process quick audio (first 2 minutes)
 function processAudioQuick() {
 	return new Promise((resolve) => {
@@ -145,6 +175,7 @@ function analyzeTranscription() {
 }
 
 module.exports = {
+	processThumbnail,
 	processAudioQuick,
 	processImages,
 	processAudioFull,

@@ -4,7 +4,7 @@ const fs = require("fs-extra");
 const { dbHelpers } = require("../database");
 const { safeJsonParse, cleanupTempFiles, isValidVideoId } = require("../utils");
 const { downloadAudio, downloadVideo, extractFrames } = require("../download");
-const { processAudioQuick, processImages, processAudioFull, analyzeTranscription } = require("../scanner");
+const { processThumbnail, processAudioQuick, processImages, processAudioFull, analyzeTranscription } = require("../scanner");
 const { completeFullScanOnly, runPhase3Only } = require("../phases");
 const { AUDIO_PATH } = require("../config");
 
@@ -168,6 +168,39 @@ async function analyzeRoute(req, res) {
 			fs.ensureDirSync("tmp");
 			cleanupTempFiles(); // Clean any leftover files
 
+			// ✅ 1️⃣ THUMBNAIL ANALYSIS (Before any downloads - fastest check)
+			console.log("✅ Analyzing video thumbnail...");
+			const thumbnailUrl = `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
+			const thumbnailResult = await processThumbnail(thumbnailUrl);
+			const thumbnailReasons = safeJsonParse(thumbnailResult, []);
+
+			if (thumbnailReasons.length > 0) {
+				console.log(
+					"⚠️ UNSAFE CONTENT DETECTED in thumbnail:",
+					thumbnailReasons
+				);
+
+				// Save result and return immediately
+				await dbHelpers.run(
+					"INSERT OR REPLACE INTO videos VALUES (?, ?, ?, datetime('now'), ?)",
+					[videoId, 0, JSON.stringify(thumbnailReasons), "full"]
+				);
+
+				cleanupTempFiles();
+				return res.json({
+					videoId,
+					safe: false,
+					reasons: thumbnailReasons,
+					cached: false,
+					scanType: "thumbnail",
+				});
+			}
+
+			console.log("✅ Thumbnail scan clear, proceeding with audio/video analysis...");
+
+			// Store thumbnailReasons for later use in Phase 1 combination
+			// (thumbnailReasons is already defined above, but we'll keep it in scope)
+
 			// ✅ 2️⃣ AUDIO DOWNLOAD (Priority: Check audio first)
 			await downloadAudio(videoId);
 
@@ -197,17 +230,20 @@ async function analyzeRoute(req, res) {
 				// Cancel video download if still in progress (we don't need it)
 				// Note: We can't actually cancel execSync, but we can skip processing
 				
+				// Combine thumbnail and audio reasons (thumbnail already checked)
+				const allReasons = [...thumbnailReasons, ...quickAudioReasons];
+				
 				// Save result and return immediately
 				await dbHelpers.run(
 					"INSERT OR REPLACE INTO videos VALUES (?, ?, ?, datetime('now'), ?)",
-					[videoId, 0, JSON.stringify(quickAudioReasons), "full"]
+					[videoId, 0, JSON.stringify(allReasons), "full"]
 				);
 
 				cleanupTempFiles();
 				return res.json({
 					videoId,
 					safe: false,
-					reasons: quickAudioReasons,
+					reasons: allReasons,
 					cached: false,
 					scanType: "quick",
 				});
@@ -227,8 +263,8 @@ async function analyzeRoute(req, res) {
 				const imageResult = "[]";
 				const imageReasons = safeJsonParse(imageResult, []);
 				
-				// Continue with Phase 1 using only audio results
-				const phase1Reasons = [...quickAudioReasons, ...imageReasons];
+				// Continue with Phase 1 using only audio results (thumbnail already checked)
+				const phase1Reasons = [...thumbnailReasons, ...quickAudioReasons, ...imageReasons];
 				const phase1Safe = phase1Reasons.length === 0;
 				
 				if (!phase1Safe) {
@@ -313,6 +349,17 @@ async function analyzeRoute(req, res) {
 							`❌ Phase 2/3 background scan failed for ${videoId}:`,
 							err.message
 						);
+						// SAFETY: If scan is interrupted, delete the preliminary result so it can be rescanned
+						dbHelpers
+							.run("DELETE FROM videos WHERE videoId=?", [videoId])
+							.then(() => {
+								console.log(
+									`⚠️ Deleted ${videoId} from database due to interrupted scan - will rescan next time`
+								);
+							})
+							.catch((dbErr) => {
+								console.error("❌ Database delete error:", dbErr.message);
+							});
 						cleanupTempFiles();
 					});
 				
@@ -329,6 +376,10 @@ async function analyzeRoute(req, res) {
 			const imageReasons = safeJsonParse(imageResult, []);
 
 			console.log(
+				`📊 Phase 1 - Thumbnail: ${thumbnailReasons.length} flags`,
+				thumbnailReasons
+			);
+			console.log(
 				`📊 Phase 1 - Quick Audio: ${quickAudioReasons.length} flags`,
 				quickAudioReasons
 			);
@@ -337,7 +388,8 @@ async function analyzeRoute(req, res) {
 				imageReasons
 			);
 
-			const phase1Reasons = [...quickAudioReasons, ...imageReasons];
+			// Combine all Phase 1 results (thumbnail already checked, but include for completeness)
+			const phase1Reasons = [...thumbnailReasons, ...quickAudioReasons, ...imageReasons];
 			const phase1Safe = phase1Reasons.length === 0;
 
 			// If unsafe content found in Phase 1, return immediately
@@ -450,12 +502,32 @@ async function analyzeRoute(req, res) {
 						`❌ Phase 2/3 background scan failed for ${videoId}:`,
 						err.message
 					);
-					// Don't update database on error - keep preliminary result
+					// SAFETY: If scan is interrupted, delete the preliminary result so it can be rescanned
+					dbHelpers
+						.run("DELETE FROM videos WHERE videoId=?", [videoId])
+						.then(() => {
+							console.log(
+								`⚠️ Deleted ${videoId} from database due to interrupted scan - will rescan next time`
+							);
+						})
+						.catch((dbErr) => {
+							console.error("❌ Database delete error:", dbErr.message);
+						});
 					cleanupTempFiles();
 				});
 		} catch (e) {
 			console.error(`❌ Scan failed for ${videoId}:`, e.message);
 			console.error("Stack:", e.stack);
+
+			// SAFETY: If scan fails, delete any partial results so it can be rescanned
+			try {
+				await dbHelpers.run("DELETE FROM videos WHERE videoId=?", [videoId]);
+				console.log(
+					`⚠️ Deleted ${videoId} from database due to scan failure - will rescan next time`
+				);
+			} catch (dbErr) {
+				console.error("❌ Failed to delete from database on scan failure:", dbErr.message);
+			}
 
 			// Cleanup temp files on error
 			cleanupTempFiles();
