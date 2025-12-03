@@ -7,6 +7,7 @@ const { downloadAudio, downloadVideo, extractFrames } = require("../download");
 const { processThumbnail, processAudioQuick, processImages, processAudioFull, analyzeTranscription } = require("../scanner");
 const { completeFullScanOnly, runPhase3Only } = require("../phases");
 const { AUDIO_PATH } = require("../config");
+const { scanManager } = require("../scanManager");
 
 async function analyzeRoute(req, res) {
 	try {
@@ -24,6 +25,35 @@ async function analyzeRoute(req, res) {
 			return res.status(400).json({
 				error: "Invalid videoId format",
 				details: `Expected 11-character YouTube video ID, got: ${videoId}`,
+			});
+		}
+
+		// ✅ 0️⃣ CHECK IF SAME VIDEO IS ALREADY SCANNING
+		if (scanManager.isScanning(videoId)) {
+			console.log(
+				`🔄 Video ${videoId} is already being scanned, returning current status...`
+			);
+			// Return current status - scan will continue in background
+			const row = await dbHelpers.get("SELECT * FROM videos WHERE videoId = ?", [videoId]);
+			if (row) {
+				const reasons = safeJsonParse(row.reasons, []);
+				return res.json({
+					videoId,
+					safe: !!row.safe,
+					reasons,
+					cached: true,
+					scanStatus: row.scanStatus || "scanning",
+					scanning: true,
+				});
+			}
+			// If no row yet, scan is in progress
+			return res.json({
+				videoId,
+				safe: true,
+				reasons: [],
+				cached: false,
+				scanStatus: "scanning",
+				scanning: true,
 			});
 		}
 
@@ -163,6 +193,18 @@ async function analyzeRoute(req, res) {
 		try {
 			console.log(`🔍 Starting scan for video: ${videoId}`);
 
+			// ✅ Register this scan with scan manager (will interrupt previous if different video)
+			const abortController = scanManager.startScan(videoId);
+
+			// Check if scan was aborted before we start
+			if (abortController.signal.aborted) {
+				console.log(`🛑 Scan for ${videoId} was aborted before starting`);
+				return res.status(409).json({
+					error: "Scan interrupted",
+					details: "Another video scan was requested",
+				});
+			}
+
 			// ✅ Prepare temp directory
 			console.log("✅ Preparing temp directory...");
 			fs.ensureDirSync("tmp");
@@ -201,8 +243,28 @@ async function analyzeRoute(req, res) {
 			// Store thumbnailReasons for later use in Phase 1 combination
 			// (thumbnailReasons is already defined above, but we'll keep it in scope)
 
+			// Check if scan was interrupted before downloads
+			if (abortController.signal.aborted) {
+				console.log(`🛑 Scan for ${videoId} was aborted before downloads`);
+				cleanupTempFiles();
+				return res.status(409).json({
+					error: "Scan interrupted",
+					details: "Another video scan was requested",
+				});
+			}
+
 			// ✅ 2️⃣ AUDIO DOWNLOAD (Priority: Check audio first)
 			await downloadAudio(videoId);
+
+			// Check if scan was interrupted after audio download
+			if (abortController.signal.aborted) {
+				console.log(`🛑 Scan for ${videoId} was aborted after audio download`);
+				cleanupTempFiles();
+				return res.status(409).json({
+					error: "Scan interrupted",
+					details: "Another video scan was requested",
+				});
+			}
 
 			// ✅ 3️⃣ START AUDIO PROCESSING IMMEDIATELY (don't wait for video)
 			console.log("✅ Starting audio processing immediately...");
@@ -214,6 +276,17 @@ async function analyzeRoute(req, res) {
 
 			// Wait for audio processing to complete first (faster path if unsafe)
 			const quickAudioResult = await audioProcessingPromise;
+			
+			// Check if scan was interrupted during audio processing
+			if (abortController.signal.aborted) {
+				console.log(`🛑 Scan for ${videoId} was aborted during audio processing`);
+				cleanupTempFiles();
+				return res.status(409).json({
+					error: "Scan interrupted",
+					details: "Another video scan was requested",
+				});
+			}
+
 			const quickAudioReasons = safeJsonParse(quickAudioResult, []);
 
 			console.log(
@@ -251,6 +324,16 @@ async function analyzeRoute(req, res) {
 
 			// Audio is safe - wait for video download to complete
 			await videoDownloadPromise;
+
+			// Check if scan was interrupted after video download
+			if (abortController.signal.aborted) {
+				console.log(`🛑 Scan for ${videoId} was aborted after video download`);
+				cleanupTempFiles();
+				return res.status(409).json({
+					error: "Scan interrupted",
+					details: "Another video scan was requested",
+				});
+			}
 
 			// ✅ 5️⃣ FRAME EXTRACTION (with error handling)
 			try {
@@ -299,8 +382,24 @@ async function analyzeRoute(req, res) {
 				});
 				
 				// Start Phase 2 & 3 in background (same as below)
+				const abortController = scanManager.getAbortController();
+				
+				// Check if scan was interrupted before starting background phases
+				if (abortController && abortController.signal.aborted) {
+					console.log(`🛑 Scan for ${videoId} was aborted, skipping Phase 2 & 3`);
+					cleanupTempFiles();
+					return;
+				}
+
 				Promise.all([processAudioFull(videoId), analyzeTranscription()])
 					.then(async ([fullAudioResult, transcriptionAnalysisResult]) => {
+						// Check if scan was interrupted during processing
+						if (abortController && abortController.signal.aborted) {
+							console.log(`🛑 Scan for ${videoId} was interrupted during Phase 2/3`);
+							cleanupTempFiles();
+							return;
+						}
+
 						const fullAudioReasons = safeJsonParse(fullAudioResult, []);
 						const transcriptionReasons = safeJsonParse(transcriptionAnalysisResult, []);
 						
@@ -342,9 +441,17 @@ async function analyzeRoute(req, res) {
 							);
 						}
 						
+						scanManager.completeScan(videoId);
 						cleanupTempFiles();
 					})
 					.catch((err) => {
+						// Check if error was due to abortion
+						if (abortController && abortController.signal.aborted) {
+							console.log(`🛑 Scan for ${videoId} was aborted`);
+							cleanupTempFiles();
+							return;
+						}
+
 						console.error(
 							`❌ Phase 2/3 background scan failed for ${videoId}:`,
 							err.message
@@ -360,6 +467,8 @@ async function analyzeRoute(req, res) {
 							.catch((dbErr) => {
 								console.error("❌ Database delete error:", dbErr.message);
 							});
+						
+						scanManager.completeScan(videoId);
 						cleanupTempFiles();
 					});
 				
@@ -392,6 +501,16 @@ async function analyzeRoute(req, res) {
 			const phase1Reasons = [...thumbnailReasons, ...quickAudioReasons, ...imageReasons];
 			const phase1Safe = phase1Reasons.length === 0;
 
+			// Check if scan was interrupted during Phase 1
+			if (abortController.signal.aborted) {
+				console.log(`🛑 Scan for ${videoId} was aborted during Phase 1`);
+				cleanupTempFiles();
+				return res.status(409).json({
+					error: "Scan interrupted",
+					details: "Another video scan was requested",
+				});
+			}
+
 			// If unsafe content found in Phase 1, return immediately
 			if (!phase1Safe) {
 				console.log(
@@ -405,6 +524,7 @@ async function analyzeRoute(req, res) {
 					[videoId, 0, JSON.stringify(phase1Reasons), "full"]
 				);
 
+				scanManager.completeScan(videoId);
 				cleanupTempFiles();
 				return res.json({
 					videoId,
@@ -516,6 +636,15 @@ async function analyzeRoute(req, res) {
 					cleanupTempFiles();
 				});
 		} catch (e) {
+			// Check if error was due to scan interruption
+			const abortController = scanManager.getAbortController();
+			if (abortController && abortController.signal.aborted) {
+				console.log(`🛑 Scan for ${videoId} was interrupted`);
+				scanManager.completeScan(videoId);
+				cleanupTempFiles();
+				return;
+			}
+
 			console.error(`❌ Scan failed for ${videoId}:`, e.message);
 			console.error("Stack:", e.stack);
 
@@ -528,6 +657,9 @@ async function analyzeRoute(req, res) {
 			} catch (dbErr) {
 				console.error("❌ Failed to delete from database on scan failure:", dbErr.message);
 			}
+
+			// Mark scan as complete
+			scanManager.completeScan(videoId);
 
 			// Cleanup temp files on error
 			cleanupTempFiles();

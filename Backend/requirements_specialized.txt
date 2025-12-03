@@ -1,0 +1,21 @@
+# Specialized Content Safety Models (Optional - for enhanced thumbnail scanning)
+# Install with: pip install -r requirements_specialized.txt
+
+# Core dependencies (should already be installed)
+opencv-python>=4.9.0.80
+numpy>=1.26.4
+ultralytics>=8.0.0
+Pillow>=10.0.0
+
+# Specialized Content Safety Model (Hugging Face Transformers)
+transformers>=4.30.0
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Optional: TensorFlow Hub models (alternative approach)
+# tensorflow>=2.13.0
+# tensorflow-hub>=0.14.0
+
+# Note: The specialized models will auto-download on first use
+# Model: Falconsai/nsfw_image_detection (or similar content safety models)
+

@@ -5,6 +5,21 @@ import os
 import cv2
 import numpy as np
 
+# Try to import specialized content safety models
+try:
+    from transformers import pipeline, AutoImageProcessor, AutoModelForImageClassification
+    import torch
+    HAS_TRANSFORMERS = True
+except ImportError:
+    HAS_TRANSFORMERS = False
+
+try:
+    import tensorflow as tf
+    import tensorflow_hub as hub
+    HAS_TF_HUB = True
+except ImportError:
+    HAS_TF_HUB = False
+
 # Try to import requests, fallback to urllib if not available
 try:
     import requests
@@ -22,7 +37,42 @@ import warnings
 warnings.filterwarnings("ignore")
 os.environ["YOLO_VERBOSE"] = "False"
 
-model = YOLO("yolov8n.pt", verbose=False)
+# Initialize YOLO model for object detection
+yolo_model = YOLO("yolov8n.pt", verbose=False)
+
+# Initialize specialized content safety models (lazy loading)
+content_safety_model = None
+content_safety_processor = None
+
+def load_content_safety_model():
+    """Load specialized content safety model for violence/horror/gore detection"""
+    global content_safety_model, content_safety_processor
+    
+    if content_safety_model is not None:
+        return True
+    
+    if not HAS_TRANSFORMERS:
+        return False
+    
+    try:
+        # Use a model trained for content safety/violence detection
+        # This model can detect violence, gore, and inappropriate content
+        model_name = "Falconsai/nsfw_image_detection"
+        
+        try:
+            processor = AutoImageProcessor.from_pretrained(model_name)
+            model = AutoModelForImageClassification.from_pretrained(model_name)
+            content_safety_processor = processor
+            content_safety_model = model
+            print("✅ Loaded specialized content safety model", file=sys.stderr)
+            return True
+        except Exception as e:
+            # Fallback to a simpler approach if model not available
+            print(f"⚠️ Could not load {model_name}, using alternative method", file=sys.stderr)
+            return False
+    except Exception as e:
+        print(f"⚠️ Content safety model loading failed: {e}", file=sys.stderr)
+        return False
 
 flags = []
 
@@ -112,14 +162,14 @@ def detect_deformed_monster(img_path):
             return False
         
         # Use YOLO to detect person
-        results = model(img_path, verbose=False, conf=0.5)
+        results = yolo_model(img_path, verbose=False, conf=0.5)
         
         person_detected = False
         person_boxes = []
         
         for r in results:
             for i, cls in enumerate(r.boxes.cls):
-                name = model.names[int(cls)].lower()
+                name = yolo_model.names[int(cls)].lower()
                 if name == "person":
                     confidence = float(r.boxes.conf[i])
                     if confidence >= 0.6:
@@ -204,6 +254,51 @@ def detect_scary_animals(img_path, detected_objects):
     
     return False
 
+def detect_content_safety_specialized(img_path):
+    """Use specialized content safety model to detect violence, gore, horror"""
+    if not load_content_safety_model():
+        return []
+    
+    try:
+        try:
+            from PIL import Image
+        except ImportError:
+            print("⚠️ PIL not available, skipping specialized model", file=sys.stderr)
+            return []
+        
+        # Load and preprocess image
+        image = Image.open(img_path).convert("RGB")
+        
+        # Run inference
+        inputs = content_safety_processor(image, return_tensors="pt")
+        
+        with torch.no_grad():
+            outputs = content_safety_model(**inputs)
+            predictions = torch.nn.functional.softmax(outputs.logits, dim=-1)
+        
+        # Get top predictions
+        top_predictions = torch.topk(predictions[0], k=3)
+        
+        safety_flags = []
+        
+        # Check for NSFW/violence indicators
+        for idx, score in zip(top_predictions.indices, top_predictions.values):
+            label = content_safety_model.config.id2label[idx.item()]
+            confidence = score.item()
+            
+            # Check for dangerous content categories
+            dangerous_keywords = ["nsfw", "violence", "gore", "blood", "horror", "scary", "weapon"]
+            if any(keyword in label.lower() for keyword in dangerous_keywords):
+                if confidence > 0.3:  # 30% confidence threshold
+                    safety_flags.append(f"specialized model detected {label} (confidence: {confidence:.2f})")
+        
+        return safety_flags
+        
+    except Exception as e:
+        # If specialized model fails, return empty (fallback to YOLO)
+        print(f"⚠️ Specialized model detection failed: {e}", file=sys.stderr)
+        return []
+
 # Get thumbnail URL from command line argument
 thumbnail_url = sys.argv[1] if len(sys.argv) > 1 else None
 
@@ -231,10 +326,11 @@ except Exception as e:
     print(json.dumps([]))
     sys.exit(0)
 
-# AI-based detection using YOLO (no simple color heuristics)
+# AI-based detection using YOLO + Specialized Content Safety Models
 try:
+    # 1. YOLO Object Detection (weapons, people, objects)
     # Use higher confidence threshold for more accurate detection
-    results = model(thumbnail_path, verbose=False, conf=0.6)  # Require 60% confidence
+    results = yolo_model(thumbnail_path, verbose=False, conf=0.6)  # Require 60% confidence
     
     detected_objects = []
     weapon_detected = False
@@ -243,7 +339,7 @@ try:
     for r in results:
         for i, cls in enumerate(r.boxes.cls):
             confidence = float(r.boxes.conf[i])
-            name = model.names[int(cls)].lower()
+            name = yolo_model.names[int(cls)].lower()
             detected_objects.append((name, confidence))
             
             # Check for weapons with high confidence
@@ -274,7 +370,12 @@ try:
     if detect_scary_animals(thumbnail_path, detected_objects):
         flags.append("scary animal detected in dark/creepy context")
     
+    # 2. Specialized Content Safety Model (violence, gore, horror, NSFW)
+    specialized_flags = detect_content_safety_specialized(thumbnail_path)
+    flags.extend(specialized_flags)
+    
 except Exception as e:
+    print(f"⚠️ Detection error: {e}", file=sys.stderr)
     pass
 
 # Removed simple color-based blood/gore and dark content detection
