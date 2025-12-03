@@ -21,8 +21,8 @@ dangerous_objects = [
     "sword", "machete", "axe", "scissors", "blade"
 ]
 
-# Get sorted list of frame files and limit to first 50
-frame_files = sorted([f for f in os.listdir("tmp") if f.endswith(".jpg")])[:50]
+# OPTIMIZATION: Process max 30 frames (was 50) for faster scanning
+frame_files = sorted([f for f in os.listdir("tmp") if f.endswith(".jpg")])[:30]
 
 for file in frame_files:
     img_path = f"tmp/{file}"

@@ -8,7 +8,14 @@ from collections import Counter
 model = whisper.load_model("tiny")
 
 # Process ENTIRE audio file
-result = model.transcribe("tmp/audio.wav", condition_on_previous_text=False)
+# OPTIMIZATION: Use faster settings for speed
+result = model.transcribe(
+    "tmp/audio.wav", 
+    condition_on_previous_text=False,
+    fp16=True,  # Use half precision for faster processing
+    beam_size=1,  # Greedy decoding (faster than beam search)
+    best_of=1  # Don't try multiple decodings
+)
 
 # Get full transcription text
 full_text = result["text"]

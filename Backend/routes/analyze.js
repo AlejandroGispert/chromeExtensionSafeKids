@@ -168,28 +168,64 @@ async function analyzeRoute(req, res) {
 			fs.ensureDirSync("tmp");
 			cleanupTempFiles(); // Clean any leftover files
 
-			// ✅ 2️⃣ AUDIO DOWNLOAD
+			// ✅ 2️⃣ AUDIO DOWNLOAD (Priority: Check audio first)
 			await downloadAudio(videoId);
 
-			// ✅ 3️⃣ VIDEO DOWNLOAD
-			await downloadVideo(videoId);
+			// ✅ 3️⃣ START AUDIO PROCESSING IMMEDIATELY (don't wait for video)
+			console.log("✅ Starting audio processing immediately...");
+			const audioProcessingPromise = processAudioQuick();
 
-			// ✅ 4️⃣ FRAME EXTRACTION
-			extractFrames();
+			// ✅ 4️⃣ VIDEO DOWNLOAD (in parallel with audio processing)
+			console.log("✅ Downloading video in parallel with audio processing...");
+			const videoDownloadPromise = downloadVideo(videoId);
 
-			// ✅ 5️⃣ & 6️⃣ PHASE 1: QUICK SCAN (Audio first 2min + Images in parallel)
+			// Wait for audio processing to complete first (faster path if unsafe)
+			const quickAudioResult = await audioProcessingPromise;
+			const quickAudioReasons = safeJsonParse(quickAudioResult, []);
+
 			console.log(
-				"✅ Phase 1: Running quick scan (Audio first 2min + Images)..."
+				`📊 Quick Audio Scan: ${quickAudioReasons.length} flags`,
+				quickAudioReasons
 			);
 
-			// Run Phase 1: Quick scan (audio first 2min + images in parallel)
-			const [quickAudioResult, imageResult] = await Promise.all([
-				processAudioQuick(),
-				processImages(),
-			]);
+			// ✅ OPTIMIZATION: If audio finds issues, skip video download entirely
+			if (quickAudioReasons.length > 0) {
+				console.log(
+					"⚠️ UNSAFE CONTENT DETECTED in audio - skipping video download"
+				);
+				
+				// Cancel video download if still in progress (we don't need it)
+				// Note: We can't actually cancel execSync, but we can skip processing
+				
+				// Save result and return immediately
+				await dbHelpers.run(
+					"INSERT OR REPLACE INTO videos VALUES (?, ?, ?, datetime('now'), ?)",
+					[videoId, 0, JSON.stringify(quickAudioReasons), "full"]
+				);
 
-			// Parse Phase 1 results
-			const quickAudioReasons = safeJsonParse(quickAudioResult, []);
+				cleanupTempFiles();
+				return res.json({
+					videoId,
+					safe: false,
+					reasons: quickAudioReasons,
+					cached: false,
+					scanType: "quick",
+				});
+			}
+
+			// Audio is safe - wait for video download to complete
+			await videoDownloadPromise;
+
+			// ✅ 5️⃣ FRAME EXTRACTION
+			extractFrames();
+
+			// ✅ 6️⃣ PHASE 1: IMAGE SCAN (audio already done)
+			console.log("✅ Phase 1: Processing images...");
+
+			// Process images
+			const imageResult = await processImages();
+
+			// Parse Phase 1 results (audio already parsed above)
 			const imageReasons = safeJsonParse(imageResult, []);
 
 			console.log(
@@ -250,7 +286,7 @@ async function analyzeRoute(req, res) {
 
 			// Start Phase 2 & 3 in parallel: Full audio word filtering + Context-aware analysis
 			Promise.all([processAudioFull(videoId), analyzeTranscription()])
-				.then(([fullAudioResult, transcriptionAnalysisResult]) => {
+				.then(async ([fullAudioResult, transcriptionAnalysisResult]) => {
 					const fullAudioReasons = safeJsonParse(fullAudioResult, []);
 					const transcriptionReasons = safeJsonParse(transcriptionAnalysisResult, []);
 
@@ -267,7 +303,7 @@ async function analyzeRoute(req, res) {
 					const allPhase2And3Reasons = [...fullAudioReasons, ...transcriptionReasons];
 
 					if (allPhase2And3Reasons.length > 0) {
-						// Either Phase 2 or Phase 3 found unsafe content
+						// Either Phase 2 or Phase 3 found unsafe content - BLOCK IMMEDIATELY
 						console.log(
 							`⚠️ Phase 2/3 found unsafe content for ${videoId}:`,
 							allPhase2And3Reasons
@@ -276,19 +312,15 @@ async function analyzeRoute(req, res) {
 						// Combine with image reasons (images already checked in Phase 1)
 						const allReasons = [...allPhase2And3Reasons, ...imageReasons];
 
-						dbHelpers
+						// Update database IMMEDIATELY so extension can block page right away
+						await dbHelpers
 							.run(
 								"UPDATE videos SET safe=0, reasons=?, scannedAt=datetime('now'), scanStatus='full' WHERE videoId=?",
 								[JSON.stringify(allReasons), videoId]
-							)
-							.then(() => {
-								console.log(
-									`✅ Updated ${videoId} to UNSAFE after Phase 2 & 3`
-								);
-							})
-							.catch((err) => {
-								console.error("❌ Database update error:", err.message);
-							});
+							);
+						console.log(
+							`✅ Updated ${videoId} to UNSAFE after Phase 2 & 3 - PAGE SHOULD BE BLOCKED NOW`
+						);
 					} else {
 						// Both Phase 2 and Phase 3 are clear - final safe confirmation
 						console.log(
