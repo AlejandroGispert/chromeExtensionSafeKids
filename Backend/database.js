@@ -17,14 +17,23 @@ function convertToPostgres(query, params) {
 	// Convert INSERT OR REPLACE to INSERT ... ON CONFLICT
 	if (pgQuery.includes("INSERT OR REPLACE")) {
 		// More robust regex to match the full INSERT OR REPLACE statement
-		const match = pgQuery.match(/INSERT OR REPLACE INTO (\w+)\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i);
+		// Use a more specific pattern that captures everything between VALUES ( and the closing )
+		const match = pgQuery.match(/INSERT OR REPLACE INTO (\w+)\s*\(([^)]+)\)\s*VALUES\s*\((.+)\)/i);
 		if (match) {
 			const table = match[1];
 			const columns = match[2].split(",").map((c) => c.trim());
-			const valuesStr = match[3];
+			const valuesStr = match[3].trim();
 			
 			// Parse placeholders and track which are params vs NOW()
+			// Split by comma, but be careful with function calls like datetime('now')
 			const placeholders = valuesStr.split(",").map((p) => p.trim());
+			
+			// Validate that columns and placeholders match
+			if (columns.length !== placeholders.length) {
+				throw new Error(
+					`Column count (${columns.length}) doesn't match placeholder count (${placeholders.length})`
+				);
+			}
 			
 			// Build VALUES clause with correct parameter numbers
 			let paramIndex = 1;
@@ -45,6 +54,13 @@ function convertToPostgres(query, params) {
 				}
 			});
 			
+			// Validate columnValueMap length
+			if (columnValueMap.length !== columns.length) {
+				throw new Error(
+					`columnValueMap length (${columnValueMap.length}) doesn't match columns length (${columns.length})`
+				);
+			}
+			
 			// Assume first column is primary key (videoId)
 			const conflictColumn = columns[0];
 			const updateColumns = columns.slice(1); // All columns except the conflict column
@@ -57,11 +73,19 @@ function convertToPostgres(query, params) {
 			// updateColumns is columns.slice(1), so indices start at 1
 			updateColumns.forEach((col, updateIdx) => {
 				const originalIdx = updateIdx + 1; // +1 because updateColumns starts from index 1 of columns
+				
+				if (originalIdx >= columnValueMap.length) {
+					throw new Error(
+						`Index ${originalIdx} out of bounds for columnValueMap (length: ${columnValueMap.length}) for column ${col}`
+					);
+				}
+				
 				const valueInfo = columnValueMap[originalIdx];
 				
 				if (!valueInfo) {
-					console.error(`Missing valueInfo for column ${col} at index ${originalIdx}`);
-					return; // Skip this column if valueInfo is missing
+					throw new Error(
+						`Missing valueInfo for column ${col} at index ${originalIdx} (columnValueMap length: ${columnValueMap.length})`
+					);
 				}
 				
 				if (valueInfo.type === "param") {
