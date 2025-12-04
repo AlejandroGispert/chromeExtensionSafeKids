@@ -54,9 +54,15 @@ function convertToPostgres(query, params) {
 			const newParams = [...params]; // Start with original params
 			let updateParamIndex = paramIndex; // Continue parameter numbering for UPDATE
 			
-			updateColumns.forEach((col) => {
-				const originalIdx = columns.indexOf(col); // Index in original columns array
+			// updateColumns is columns.slice(1), so indices start at 1
+			updateColumns.forEach((col, updateIdx) => {
+				const originalIdx = updateIdx + 1; // +1 because updateColumns starts from index 1 of columns
 				const valueInfo = columnValueMap[originalIdx];
+				
+				if (!valueInfo) {
+					console.error(`Missing valueInfo for column ${col} at index ${originalIdx}`);
+					return; // Skip this column if valueInfo is missing
+				}
 				
 				if (valueInfo.type === "param") {
 					// Use the same parameter value
@@ -66,7 +72,7 @@ function convertToPostgres(query, params) {
 				} else if (valueInfo.type === "now") {
 					// Use NOW() in UPDATE too
 					updateSetParts.push(`${col} = NOW()`);
-				} else {
+				} else if (valueInfo.type === "literal") {
 					// Literal value (shouldn't happen in our queries)
 					updateSetParts.push(`${col} = ${valueInfo.value}`);
 				}
