@@ -10,6 +10,96 @@ const usePostgres = !!process.env.DATABASE_URL;
 let db = null;
 let dbHelpers = null;
 
+// Helper to convert SQLite syntax to Postgres syntax
+function convertToPostgres(query, params) {
+	let pgQuery = query.trim();
+	
+	// Convert INSERT OR REPLACE to INSERT ... ON CONFLICT
+	if (pgQuery.includes("INSERT OR REPLACE")) {
+		// More robust regex to match the full INSERT OR REPLACE statement
+		const match = pgQuery.match(/INSERT OR REPLACE INTO (\w+)\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i);
+		if (match) {
+			const table = match[1];
+			const columns = match[2].split(",").map((c) => c.trim());
+			const valuesStr = match[3];
+			
+			// Count actual ? placeholders (not datetime('now'))
+			const placeholders = valuesStr.split(",").map((p) => p.trim());
+			const paramCount = placeholders.filter((p) => p === "?").length;
+			
+			// Assume first column is primary key (videoId)
+			const conflictColumn = columns[0];
+			const updateColumns = columns.slice(1); // All columns except the conflict column
+			
+			// Build Postgres placeholders, replacing ? with $1, $2, etc., and datetime('now') with NOW()
+			let paramIndex = 1;
+			const pgPlaceholders = placeholders.map((p) => {
+				if (p === "?") {
+					return `$${paramIndex++}`;
+				} else if (p.includes("datetime('now')")) {
+					return "NOW()";
+				}
+				return p; // Keep as-is (shouldn't happen)
+			}).join(", ");
+			
+			const updateSet = updateColumns.map((col, i) => `${col} = $${paramCount + i + 1}`).join(", ");
+			
+			pgQuery = `
+				INSERT INTO ${table} (${columns.join(", ")}) 
+				VALUES (${pgPlaceholders})
+				ON CONFLICT (${conflictColumn}) 
+				DO UPDATE SET ${updateSet}
+			`.trim();
+			
+			// Duplicate values for UPDATE clause (only for non-datetime params)
+			const newParams = [...params];
+			updateColumns.forEach((col) => {
+				const colIndex = columns.indexOf(col);
+				if (colIndex >= 0 && colIndex < params.length) {
+					newParams.push(params[colIndex]);
+				}
+			});
+			return { query: pgQuery, params: newParams };
+		}
+	}
+	
+	// Convert datetime('now') to NOW()
+	pgQuery = pgQuery.replace(/datetime\('now'\)/gi, "NOW()");
+	
+	// Convert ? placeholders to $1, $2, ...
+	if (params && params.length > 0) {
+		let paramIndex = 1;
+		pgQuery = pgQuery.replace(/\?/g, () => `$${paramIndex++}`);
+	}
+	
+	return { query: pgQuery, params: params || [] };
+}
+
+// Initialize Postgres connection
+async function initPostgres(pool) {
+	try {
+		const client = await pool.connect();
+		try {
+			await client.query(`
+				CREATE TABLE IF NOT EXISTS videos (
+					videoId TEXT PRIMARY KEY,
+					title TEXT,
+					safe INTEGER,
+					reasons TEXT,
+					scannedAt TIMESTAMP,
+					scanStatus TEXT
+				)
+			`);
+			console.log("✅ Postgres videos table ready");
+		} finally {
+			client.release();
+		}
+	} catch (err) {
+		console.error("❌ Postgres init error:", err.message);
+		process.exit(1);
+	}
+}
+
 if (usePostgres) {
 	const { Pool } = require("pg");
 
@@ -21,37 +111,14 @@ if (usePostgres) {
 				: { rejectUnauthorized: false },
 	});
 
-	async function initPostgres() {
-		try {
-			const client = await pool.connect();
-			try {
-				await client.query(`
-					CREATE TABLE IF NOT EXISTS videos (
-						videoId TEXT PRIMARY KEY,
-						title TEXT,
-						safe INTEGER,
-						reasons TEXT,
-						scannedAt TIMESTAMP,
-						scanStatus TEXT
-					)
-				`);
-				console.log("✅ Postgres videos table ready");
-			} finally {
-				client.release();
-			}
-		} catch (err) {
-			console.error("❌ Postgres init error:", err.message);
-			process.exit(1);
-		}
-	}
-
 	// Kick off initialization
-	initPostgres();
+	initPostgres(pool);
 
 	dbHelpers = {
 		get: (query, params) => {
+			const { query: pgQuery, params: pgParams } = convertToPostgres(query, params);
 			return pool
-				.query(query, params)
+				.query(pgQuery, pgParams)
 				.then((res) => res.rows[0] || null)
 				.catch((err) => {
 					throw err;
@@ -59,13 +126,17 @@ if (usePostgres) {
 		},
 
 		run: (query, params) => {
+			const { query: pgQuery, params: pgParams } = convertToPostgres(query, params);
 			return pool
-				.query(query, params)
+				.query(pgQuery, pgParams)
 				.then((res) => ({ rowCount: res.rowCount }))
 				.catch((err) => {
 					throw err;
 				});
 		},
+
+		// Helper for NOW() / datetime('now') - returns SQL string
+		now: () => "NOW()",
 
 		close: () => {
 			return pool.end();
@@ -172,6 +243,10 @@ if (usePostgres) {
 			});
 		},
 
+
+		// Helper for NOW() / datetime('now')
+		now: () => "datetime('now')",
+
 		close: () => {
 			return new Promise((resolve, reject) => {
 				db.close((err) => {
@@ -186,5 +261,6 @@ if (usePostgres) {
 module.exports = {
 	db,
 	dbHelpers,
+	usePostgres, // Export so other modules can check DB type if needed
 };
 
