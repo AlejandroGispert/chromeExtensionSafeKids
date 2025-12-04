@@ -5,6 +5,24 @@ function getVideoId() {
 	return urlParams.get("v");
 }
 
+// Try to get the video title from the page (fallback to document.title)
+function getVideoTitle() {
+	// YouTube watch page title element
+	const titleElement = document.querySelector(
+		"h1.ytd-watch-metadata yt-formatted-string, h1.title, #title h1"
+	);
+	if (titleElement && titleElement.textContent) {
+		return titleElement.textContent.trim();
+	}
+
+	// Fallback: document title without the " - YouTube" suffix
+	if (document.title) {
+		return document.title.replace(/\s*-\s*YouTube\s*$/i, "").trim();
+	}
+
+	return "";
+}
+
 // Create full-page blocking overlay for unsafe content
 function createBlockingOverlay(reasons) {
 	// Remove existing overlay if any
@@ -186,11 +204,13 @@ async function checkVideoSafety(videoId) {
 		}
 
 		// Use background script to make the request (better for Chrome extension security)
+		const title = getVideoTitle();
 		let response;
 		try {
 			response = await chrome.runtime.sendMessage({
 				action: "checkVideo",
 				videoId: videoId,
+				title,
 			});
 			console.log("Kidsafe: Video check response", response);
 		} catch (msgErr) {
@@ -247,26 +267,29 @@ async function checkVideoSafety(videoId) {
 
 		// Check if backend is running
 		const badge = document.getElementById("kidsafe-badge");
-		if (badge) {
-			if (error.message.includes("Failed to fetch") ||
-				error.message.includes("NetworkError") ||
-				error.message.includes("Backend not reachable") ||
-				error.message.includes("Failed to check video")) {
-				badge.innerHTML = `
-					<span class="kidsafe-icon">❌</span>
-					<span class="kidsafe-text">Backend not running</span>
-				`;
-				badge.style.backgroundColor = "#9E9E9E";
-				badge.title = "Make sure the Kidsafe backend server is running on http://localhost:4000";
-			} else {
-				badge.innerHTML = `
-					<span class="kidsafe-icon">⚠️</span>
-					<span class="kidsafe-text">Error checking video</span>
-				`;
-				badge.style.backgroundColor = "#FF9800";
-				badge.title = error.message;
+			if (badge) {
+				if (
+					error.message.includes("Failed to fetch") ||
+					error.message.includes("NetworkError") ||
+					error.message.includes("Backend not reachable") ||
+					error.message.includes("Failed to check video")
+				) {
+					badge.innerHTML = `
+						<span class="kidsafe-icon">❌</span>
+						<span class="kidsafe-text">Backend not running</span>
+					`;
+					badge.style.backgroundColor = "#9E9E9E";
+					badge.title =
+						"Make sure the Kidsafe backend server is running and reachable from this browser.";
+				} else {
+					badge.innerHTML = `
+						<span class="kidsafe-icon">⚠️</span>
+						<span class="kidsafe-text">Error checking video</span>
+					`;
+					badge.style.backgroundColor = "#FF9800";
+					badge.title = error.message;
+				}
 			}
-		}
 	}
 }
 

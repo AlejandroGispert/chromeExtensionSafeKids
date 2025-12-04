@@ -1,10 +1,15 @@
 /* global chrome */
 // Background service worker for Kidsafe extension
 
+// IMPORTANT: Set this to your deployed backend URL when running on Railway or other hosting.
+// For local development, use "http://localhost:4000".
+// Example for Railway: "https://your-kidsafe-backend.up.railway.app"
+const BACKEND_URL = "http://localhost:4000";
+
 // Listen for messages from content script or popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 	if (request.action === "checkVideo") {
-		checkVideoSafety(request.videoId)
+		checkVideoSafety(request.videoId, request.title)
 			.then((result) => sendResponse({ success: true, data: result }))
 			.catch((error) => sendResponse({ success: false, error: error.message }));
 		return true; // Keep channel open for async response
@@ -19,14 +24,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 // Check video safety via API
-async function checkVideoSafety(videoId) {
+async function checkVideoSafety(videoId, title) {
 	try {
-		const response = await fetch("http://localhost:4000/analyze", {
+		const response = await fetch(`${BACKEND_URL}/analyze`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
 			},
-			body: JSON.stringify({ videoId }),
+			body: JSON.stringify({ videoId, title }),
 		});
 
 		if (!response.ok) {
@@ -60,7 +65,7 @@ chrome.runtime.onInstalled.addListener(() => {
 
 async function checkBackendHealth() {
 	try {
-		const response = await fetch("http://localhost:4000/health", {
+		const response = await fetch(`${BACKEND_URL}/health`, {
 			method: "GET",
 		});
 		if (response.ok) {

@@ -33,8 +33,8 @@ async function analyzeRoute(req, res) {
 
 				// Save result and return immediately
 				await dbHelpers.run(
-					"INSERT OR REPLACE INTO videos VALUES (?, ?, ?, datetime('now'), ?)",
-					[videoId, 0, JSON.stringify(titleReasons), "full"]
+					"INSERT OR REPLACE INTO videos (videoId, title, safe, reasons, scannedAt, scanStatus) VALUES (?, ?, ?, ?, datetime('now'), ?)",
+					[videoId, title, 0, JSON.stringify(titleReasons), "full"]
 				);
 
 				return res.json({
@@ -250,8 +250,8 @@ async function analyzeRoute(req, res) {
 
 				// Save result and return immediately
 				await dbHelpers.run(
-					"INSERT OR REPLACE INTO videos VALUES (?, ?, ?, datetime('now'), ?)",
-					[videoId, 0, JSON.stringify(thumbnailReasons), "full"]
+					"INSERT OR REPLACE INTO videos (videoId, title, safe, reasons, scannedAt, scanStatus) VALUES (?, ?, ?, ?, datetime('now'), ?)",
+					[videoId, title || null, 0, JSON.stringify(thumbnailReasons), "full"]
 				);
 
 				cleanupTempFiles();
@@ -334,8 +334,8 @@ async function analyzeRoute(req, res) {
 				
 				// Save result and return immediately
 				await dbHelpers.run(
-					"INSERT OR REPLACE INTO videos VALUES (?, ?, ?, datetime('now'), ?)",
-					[videoId, 0, JSON.stringify(allReasons), "full"]
+					"INSERT OR REPLACE INTO videos (videoId, title, safe, reasons, scannedAt, scanStatus) VALUES (?, ?, ?, ?, datetime('now'), ?)",
+					[videoId, title || null, 0, JSON.stringify(allReasons), "full"]
 				);
 
 				cleanupTempFiles();
@@ -379,8 +379,8 @@ async function analyzeRoute(req, res) {
 				if (!phase1Safe) {
 					// Still found issues in audio
 					await dbHelpers.run(
-						"INSERT OR REPLACE INTO videos VALUES (?, ?, ?, datetime('now'), ?)",
-						[videoId, 0, JSON.stringify(phase1Reasons), "full"]
+						"INSERT OR REPLACE INTO videos (videoId, title, safe, reasons, scannedAt, scanStatus) VALUES (?, ?, ?, ?, datetime('now'), ?)",
+						[videoId, title || null, 0, JSON.stringify(phase1Reasons), "full"]
 					);
 					cleanupTempFiles();
 					return res.json({
@@ -394,8 +394,8 @@ async function analyzeRoute(req, res) {
 				
 				// Audio is safe, proceed with Phase 2 & 3 (skip image processing)
 				await dbHelpers.run(
-					"INSERT OR REPLACE INTO videos VALUES (?, ?, ?, datetime('now'), ?)",
-					[videoId, 1, JSON.stringify([]), "quick"]
+					"INSERT OR REPLACE INTO videos (videoId, title, safe, reasons, scannedAt, scanStatus) VALUES (?, ?, ?, ?, datetime('now'), ?)",
+					[videoId, title || null, 1, JSON.stringify([]), "quick"]
 				);
 				
 				res.json({
@@ -546,8 +546,8 @@ async function analyzeRoute(req, res) {
 
 				// Save result and return immediately (mark as full since we found unsafe content)
 				await dbHelpers.run(
-					"INSERT OR REPLACE INTO videos VALUES (?, ?, ?, datetime('now'), ?)",
-					[videoId, 0, JSON.stringify(phase1Reasons), "full"]
+					"INSERT OR REPLACE INTO videos (videoId, title, safe, reasons, scannedAt, scanStatus) VALUES (?, ?, ?, ?, datetime('now'), ?)",
+					[videoId, title || null, 0, JSON.stringify(phase1Reasons), "full"]
 				);
 
 				scanManager.completeScan(videoId);
@@ -568,8 +568,8 @@ async function analyzeRoute(req, res) {
 
 			// Save preliminary result with scanStatus = "quick"
 			await dbHelpers.run(
-				"INSERT OR REPLACE INTO videos VALUES (?, ?, ?, datetime('now'), ?)",
-				[videoId, 1, JSON.stringify([]), "quick"]
+				"INSERT OR REPLACE INTO videos (videoId, title, safe, reasons, scannedAt, scanStatus) VALUES (?, ?, ?, ?, datetime('now'), ?)",
+				[videoId, title || null, 1, JSON.stringify([]), "quick"]
 			);
 
 			// Return preliminary safe result immediately

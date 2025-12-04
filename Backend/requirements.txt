@@ -1,0 +1,10 @@
+-r requirements_specialized.txt
+
+# Core AI / ML stack
+openai-whisper
+torchaudio
+requests
+psutil
+tqdm
+
+

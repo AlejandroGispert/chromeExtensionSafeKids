@@ -23,7 +23,7 @@ app.use(notFoundRoute);
 app.use(errorHandler);
 
 // Start server
-const PORT = 4000;
+const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
 	console.log(`✅ Kidsafe backend running on http://localhost:${PORT}`);
 });
