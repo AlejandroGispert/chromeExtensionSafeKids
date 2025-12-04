@@ -23,42 +23,64 @@ function convertToPostgres(query, params) {
 			const columns = match[2].split(",").map((c) => c.trim());
 			const valuesStr = match[3];
 			
-			// Count actual ? placeholders (not datetime('now'))
+			// Parse placeholders and track which are params vs NOW()
 			const placeholders = valuesStr.split(",").map((p) => p.trim());
-			const paramCount = placeholders.filter((p) => p === "?").length;
+			
+			// Build VALUES clause with correct parameter numbers
+			let paramIndex = 1;
+			const pgPlaceholders = [];
+			const columnValueMap = []; // Track what each column gets: param index or "NOW"
+			
+			placeholders.forEach((p) => {
+				if (p === "?") {
+					pgPlaceholders.push(`$${paramIndex}`);
+					columnValueMap.push({ type: "param", index: paramIndex - 1 }); // 0-based param index
+					paramIndex++;
+				} else if (p.includes("datetime('now')")) {
+					pgPlaceholders.push("NOW()");
+					columnValueMap.push({ type: "now" });
+				} else {
+					pgPlaceholders.push(p);
+					columnValueMap.push({ type: "literal", value: p });
+				}
+			});
 			
 			// Assume first column is primary key (videoId)
 			const conflictColumn = columns[0];
 			const updateColumns = columns.slice(1); // All columns except the conflict column
 			
-			// Build Postgres placeholders, replacing ? with $1, $2, etc., and datetime('now') with NOW()
-			let paramIndex = 1;
-			const pgPlaceholders = placeholders.map((p) => {
-				if (p === "?") {
-					return `$${paramIndex++}`;
-				} else if (p.includes("datetime('now')")) {
-					return "NOW()";
-				}
-				return p; // Keep as-is (shouldn't happen)
-			}).join(", ");
+			// Build UPDATE SET clause - map each column to its corresponding value
+			const updateSetParts = [];
+			const newParams = [...params]; // Start with original params
+			let updateParamIndex = paramIndex; // Continue parameter numbering for UPDATE
 			
-			const updateSet = updateColumns.map((col, i) => `${col} = $${paramCount + i + 1}`).join(", ");
+			updateColumns.forEach((col) => {
+				const originalIdx = columns.indexOf(col); // Index in original columns array
+				const valueInfo = columnValueMap[originalIdx];
+				
+				if (valueInfo.type === "param") {
+					// Use the same parameter value
+					updateSetParts.push(`${col} = $${updateParamIndex}`);
+					newParams.push(params[valueInfo.index]);
+					updateParamIndex++;
+				} else if (valueInfo.type === "now") {
+					// Use NOW() in UPDATE too
+					updateSetParts.push(`${col} = NOW()`);
+				} else {
+					// Literal value (shouldn't happen in our queries)
+					updateSetParts.push(`${col} = ${valueInfo.value}`);
+				}
+			});
+			
+			const updateSet = updateSetParts.join(", ");
 			
 			pgQuery = `
 				INSERT INTO ${table} (${columns.join(", ")}) 
-				VALUES (${pgPlaceholders})
+				VALUES (${pgPlaceholders.join(", ")})
 				ON CONFLICT (${conflictColumn}) 
 				DO UPDATE SET ${updateSet}
 			`.trim();
 			
-			// Duplicate values for UPDATE clause (only for non-datetime params)
-			const newParams = [...params];
-			updateColumns.forEach((col) => {
-				const colIndex = columns.indexOf(col);
-				if (colIndex >= 0 && colIndex < params.length) {
-					newParams.push(params[colIndex]);
-				}
-			});
 			return { query: pgQuery, params: newParams };
 		}
 	}

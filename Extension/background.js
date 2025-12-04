@@ -4,7 +4,7 @@
 // IMPORTANT: Set this to your deployed backend URL when running on Railway or other hosting.
 // For local development, use "http://localhost:4000".
 // Example for Railway: "https://your-kidsafe-backend.up.railway.app"
-const BACKEND_URL = "http://localhost:4000";
+const BACKEND_URL = "https://chromeextensionsafekids-production.up.railway.app";
 
 // Listen for messages from content script or popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
