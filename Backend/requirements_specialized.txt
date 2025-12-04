@@ -7,7 +7,8 @@ numpy>=1.26.4
 ultralytics>=8.0.0
 Pillow>=10.0.0
 
-# Specialized Content Safety Model (Hugging Face Transformers)
+# Specialized Content Safety Models (Hugging Face Transformers)
+# These models provide better detection of horror, gore, violence, and inappropriate content
 transformers>=4.30.0
 torch>=2.0.0
 torchvision>=0.15.0
@@ -17,5 +18,9 @@ torchvision>=0.15.0
 # tensorflow-hub>=0.14.0
 
 # Note: The specialized models will auto-download on first use
-# Model: Falconsai/nsfw_image_detection (or similar content safety models)
+# Models tried in order:
+# 1. Falconsai/nsfw_image_detection - Primary model for NSFW/violence detection
+# 2. openai/clip-vit-base-patch32 - Fallback CLIP model for semantic understanding
+# 
+# The system will automatically try each model and use the first one that loads successfully.
 

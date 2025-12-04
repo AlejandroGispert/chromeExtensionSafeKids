@@ -24,14 +24,36 @@ except:
     # Fallback to full audio if extraction fails
     audio_file = "tmp/audio.wav"
 
-# OPTIMIZATION: Use faster settings for speed
-result = model.transcribe(
-    audio_file, 
-    condition_on_previous_text=False,
-    fp16=True,  # Use half precision for faster processing
-    beam_size=1,  # Greedy decoding (faster than beam search)
-    best_of=1  # Don't try multiple decodings
-)
+try:
+try:
+	# OPTIMIZATION: Use faster settings for speed
+	result = model.transcribe(
+		audio_file, 
+		condition_on_previous_text=False,
+		fp16=True,  # Use half precision for faster processing
+		beam_size=1,  # Greedy decoding (faster than beam search)
+		best_of=1  # Don't try multiple decodings
+	)
+except KeyboardInterrupt:
+	# Graceful shutdown - return empty result
+	print("[]", file=sys.stdout)
+	sys.stdout.flush()
+	sys.exit(0)
+except Exception as e:
+	# Any other error - return empty result
+	print("[]", file=sys.stdout)
+	sys.stdout.flush()
+	sys.exit(0)
+except KeyboardInterrupt:
+	# Graceful shutdown - return empty result
+	print("[]", file=sys.stdout)
+	sys.stdout.flush()
+	sys.exit(0)
+except Exception as e:
+	# Any other error - return empty result
+	print("[]", file=sys.stdout)
+	sys.stdout.flush()
+	sys.exit(0)
 
 # Get transcription text
 text = result["text"].lower()
@@ -77,3 +99,4 @@ if scream_count >= 3:
     flags.append(f"screams detected in audio ({scream_count} instances)")
 
 print(json.dumps(flags))
+sys.stdout.flush()

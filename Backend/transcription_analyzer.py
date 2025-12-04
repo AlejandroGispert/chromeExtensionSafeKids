@@ -3,19 +3,40 @@ import json
 import sys
 import re
 from collections import Counter
+import signal
+
+# Handle graceful shutdown
+def signal_handler(sig, frame):
+	print("[]", file=sys.stdout)
+	sys.stdout.flush()
+	sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 # Use "tiny" model for faster processing
 model = whisper.load_model("tiny")
 
-# Process ENTIRE audio file
-# OPTIMIZATION: Use faster settings for speed
-result = model.transcribe(
-    "tmp/audio.wav", 
-    condition_on_previous_text=False,
-    fp16=True,  # Use half precision for faster processing
-    beam_size=1,  # Greedy decoding (faster than beam search)
-    best_of=1  # Don't try multiple decodings
-)
+try:
+	# Process ENTIRE audio file
+	# OPTIMIZATION: Use faster settings for speed
+	result = model.transcribe(
+		"tmp/audio.wav", 
+		condition_on_previous_text=False,
+		fp16=True,  # Use half precision for faster processing
+		beam_size=1,  # Greedy decoding (faster than beam search)
+		best_of=1  # Don't try multiple decodings
+	)
+except KeyboardInterrupt:
+	# Graceful shutdown - return empty result
+	print("[]", file=sys.stdout)
+	sys.stdout.flush()
+	sys.exit(0)
+except Exception as e:
+	# Any other error - return empty result
+	print("[]", file=sys.stdout)
+	sys.stdout.flush()
+	sys.exit(0)
 
 # Get full transcription text
 full_text = result["text"]
@@ -158,3 +179,4 @@ if danger_score >= 4:
 
 # Output flags as JSON
 print(json.dumps(flags))
+sys.stdout.flush()

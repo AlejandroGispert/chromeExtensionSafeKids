@@ -29,10 +29,10 @@ bad_words = [
 flags = []
 for w in bad_words:
     # Use word boundaries to avoid false positives (e.g., "class" containing "ass")
-    import re
     pattern = r'\b' + re.escape(w) + r'\b'
     if re.search(pattern, text):
         flags.append(f"bad speech: {w}")
 
 print(json.dumps(flags))
+sys.stdout.flush()
 

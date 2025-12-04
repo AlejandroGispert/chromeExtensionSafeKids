@@ -4,6 +4,16 @@ import os
 import json
 import sys
 import numpy as np
+import signal
+
+# Handle graceful shutdown
+def signal_handler(sig, frame):
+	print("[]", file=sys.stdout)
+	sys.stdout.flush()
+	sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 # Suppress YOLO verbose output - redirect to stderr so JSON goes to stdout
 import warnings
@@ -135,5 +145,11 @@ for file in frame_files:
         break
 
 # Only print JSON to stdout, everything else goes to stderr
-print(json.dumps(flags), file=sys.stdout)
-sys.stdout.flush()
+try:
+	print(json.dumps(flags), file=sys.stdout)
+	sys.stdout.flush()
+except (KeyboardInterrupt, BrokenPipeError):
+	# Graceful shutdown - output empty result
+	print("[]", file=sys.stdout)
+	sys.stdout.flush()
+	sys.exit(0)

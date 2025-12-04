@@ -29,15 +29,22 @@ app.listen(PORT, () => {
 });
 
 // Graceful shutdown
-process.on("SIGINT", () => {
+process.on("SIGINT", async () => {
 	console.log("\n🛑 Shutting down gracefully...");
-	dbHelpers
-		.close()
-		.then(() => {
-			process.exit(0);
-		})
-		.catch((err) => {
-			console.error("❌ Error closing database:", err.message);
-			process.exit(1);
-		});
+	
+	// Interrupt any active scans
+	const { scanManager } = require("./scanManager");
+	scanManager.interruptCurrentScan();
+	
+	// Give background processes a moment to clean up
+	await new Promise((resolve) => setTimeout(resolve, 1000));
+	
+	try {
+		await dbHelpers.close();
+		console.log("✅ Database connection closed.");
+		process.exit(0);
+	} catch (err) {
+		console.error("❌ Error closing database:", err.message);
+		process.exit(1);
+	}
 });

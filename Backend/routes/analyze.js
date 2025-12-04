@@ -8,10 +8,11 @@ const { processThumbnail, processAudioQuick, processImages, processAudioFull, an
 const { completeFullScanOnly, runPhase3Only } = require("../phases");
 const { AUDIO_PATH } = require("../config");
 const { scanManager } = require("../scanManager");
+const { scanTitleForDanger } = require("../titleScanner");
 
 async function analyzeRoute(req, res) {
 	try {
-		const { videoId } = req.body;
+		const { videoId, title } = req.body;
 
 		// Validate input
 		if (!videoId) {
@@ -19,6 +20,31 @@ async function analyzeRoute(req, res) {
 				error: "Missing videoId",
 				details: "Please provide a videoId in the request body",
 			});
+		}
+
+		// ✅ 0️⃣ Title-based pre-check (fastest, no downloads)
+		if (title && typeof title === "string") {
+			const titleReasons = scanTitleForDanger(title);
+			if (titleReasons.length > 0) {
+				console.log(
+					`⚠️ UNSAFE CONTENT DETECTED in title for ${videoId}:`,
+					titleReasons
+				);
+
+				// Save result and return immediately
+				await dbHelpers.run(
+					"INSERT OR REPLACE INTO videos VALUES (?, ?, ?, datetime('now'), ?)",
+					[videoId, 0, JSON.stringify(titleReasons), "full"]
+				);
+
+				return res.json({
+					videoId,
+					safe: false,
+					reasons: titleReasons,
+					cached: false,
+					scanType: "title",
+				});
+			}
 		}
 
 		if (!isValidVideoId(videoId)) {

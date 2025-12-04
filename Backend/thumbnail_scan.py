@@ -4,6 +4,16 @@ import sys
 import os
 import cv2
 import numpy as np
+import signal
+
+# Handle graceful shutdown
+def signal_handler(sig, frame):
+	print("[]", file=sys.stdout)
+	sys.stdout.flush()
+	sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 # Try to import specialized content safety models
 try:
@@ -43,36 +53,67 @@ yolo_model = YOLO("yolov8n.pt", verbose=False)
 # Initialize specialized content safety models (lazy loading)
 content_safety_model = None
 content_safety_processor = None
+content_safety_model_type = None  # Track which model is loaded
 
 def load_content_safety_model():
-    """Load specialized content safety model for violence/horror/gore detection"""
-    global content_safety_model, content_safety_processor
+    """Load specialized content safety model for violence/horror/gore detection with fallbacks"""
+    global content_safety_model, content_safety_processor, content_safety_model_type
     
     if content_safety_model is not None:
         return True
     
     if not HAS_TRANSFORMERS:
+        print("⚠️ Transformers library not available, skipping specialized models", file=sys.stderr)
         return False
     
-    try:
-        # Use a model trained for content safety/violence detection
-        # This model can detect violence, gore, and inappropriate content
-        model_name = "Falconsai/nsfw_image_detection"
-        
+    # Try multiple models in order of preference
+    model_options = [
+        {
+            "name": "Falconsai/nsfw_image_detection",
+            "type": "nsfw",
+            "description": "NSFW and content safety detection",
+            "use_classification": True
+        },
+        {
+            "name": "openai/clip-vit-base-patch32",
+            "type": "clip",
+            "description": "CLIP for semantic image understanding",
+            "use_classification": False
+        }
+    ]
+    
+    for model_option in model_options:
         try:
-            processor = AutoImageProcessor.from_pretrained(model_name)
-            model = AutoModelForImageClassification.from_pretrained(model_name)
+            model_name = model_option["name"]
+            print(f"🔄 Attempting to load {model_name}...", file=sys.stderr)
+            
+            if model_option["use_classification"]:
+                # Standard image classification model
+                processor = AutoImageProcessor.from_pretrained(model_name)
+                model = AutoModelForImageClassification.from_pretrained(model_name)
+            else:
+                # CLIP model - use different approach
+                try:
+                    from transformers import CLIPProcessor, CLIPModel
+                    processor = CLIPProcessor.from_pretrained(model_name)
+                    model = CLIPModel.from_pretrained(model_name)
+                except ImportError:
+                    print(f"⚠️ CLIP models require CLIPProcessor, skipping {model_name}", file=sys.stderr)
+                    continue
+            
             content_safety_processor = processor
             content_safety_model = model
-            print("✅ Loaded specialized content safety model", file=sys.stderr)
+            content_safety_model_type = model_option["type"]
+            
+            print(f"✅ Loaded specialized content safety model: {model_name} ({model_option['description']})", file=sys.stderr)
             return True
+            
         except Exception as e:
-            # Fallback to a simpler approach if model not available
-            print(f"⚠️ Could not load {model_name}, using alternative method", file=sys.stderr)
-            return False
-    except Exception as e:
-        print(f"⚠️ Content safety model loading failed: {e}", file=sys.stderr)
-        return False
+            print(f"⚠️ Could not load {model_name}: {str(e)[:200]}", file=sys.stderr)
+            continue
+    
+    print("⚠️ All specialized content safety models failed to load, using YOLO only", file=sys.stderr)
+    return False
 
 flags = []
 
@@ -254,6 +295,94 @@ def detect_scary_animals(img_path, detected_objects):
     
     return False
 
+def detect_blood_gore_advanced(img_path):
+    """Advanced blood/gore detection using multiple techniques"""
+    try:
+        img = cv2.imread(img_path)
+        if img is None:
+            return False, 0
+        
+        # Convert to HSV for better color detection
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        
+        # More sophisticated red detection for blood
+        # Blood typically has specific hue ranges and saturation
+        lower_red1 = np.array([0, 120, 70])   # Deep red, high saturation
+        upper_red1 = np.array([10, 255, 200])
+        lower_red2 = np.array([170, 120, 70])
+        upper_red2 = np.array([180, 255, 200])
+        
+        mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
+        mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
+        red_mask = mask1 + mask2
+        
+        # Count red pixels
+        red_pixel_count = cv2.countNonZero(red_mask)
+        total_pixels = img.shape[0] * img.shape[1]
+        red_percentage = (red_pixel_count / total_pixels) * 100
+        
+        # Check for blood-like patterns (clusters, not just scattered red)
+        # Use morphological operations to find blood-like regions
+        kernel = np.ones((5, 5), np.uint8)
+        red_mask_closed = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel)
+        contours, _ = cv2.findContours(red_mask_closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Check for significant blood-like regions
+        large_blood_regions = 0
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area > (total_pixels * 0.01):  # Region > 1% of image
+                large_blood_regions += 1
+        
+        # Flag if: significant red content (>3%) OR multiple large blood regions
+        if red_percentage > 3.0 or large_blood_regions >= 2:
+            return True, red_percentage
+        
+        return False, 0
+    except Exception as e:
+        return False, 0
+
+def detect_horror_scene(img_path):
+    """Detect horror scenes using multiple indicators"""
+    try:
+        img = cv2.imread(img_path)
+        if img is None:
+            return False
+        
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # Multiple horror indicators
+        horror_score = 0
+        
+        # 1. Very dark overall (horror movies are often dark)
+        avg_brightness = np.mean(gray)
+        if avg_brightness < 25:
+            horror_score += 2
+        
+        # 2. High contrast (dramatic horror lighting)
+        contrast = np.std(gray)
+        if contrast > 55 and avg_brightness < 40:
+            horror_score += 2
+        
+        # 3. Check for dark regions with bright highlights (horror lighting)
+        _, thresh = cv2.threshold(gray, 30, 255, cv2.THRESH_BINARY_INV)
+        dark_regions = np.sum(thresh > 0) / gray.size
+        if dark_regions > 0.4 and contrast > 50:  # >40% dark with high contrast
+            horror_score += 2
+        
+        # 4. Check for red tint (blood/horror atmosphere)
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        red_mask = cv2.inRange(hsv, np.array([0, 50, 50]), np.array([10, 255, 255])) + \
+                   cv2.inRange(hsv, np.array([170, 50, 50]), np.array([180, 255, 255]))
+        red_percentage = np.sum(red_mask > 0) / red_mask.size * 100
+        if red_percentage > 2.5 and avg_brightness < 50:  # Red tint in dark scene
+            horror_score += 1
+        
+        # Flag if multiple horror indicators
+        return horror_score >= 3
+    except Exception as e:
+        return False
+
 def detect_content_safety_specialized(img_path):
     """Use specialized content safety model to detect violence, gore, horror"""
     if not load_content_safety_model():
@@ -276,27 +405,112 @@ def detect_content_safety_specialized(img_path):
             outputs = content_safety_model(**inputs)
             predictions = torch.nn.functional.softmax(outputs.logits, dim=-1)
         
-        # Get top predictions
-        top_predictions = torch.topk(predictions[0], k=3)
+        # Get top predictions (check more for better detection)
+        top_predictions = torch.topk(predictions[0], k=5)
         
         safety_flags = []
         
-        # Check for NSFW/violence indicators
-        for idx, score in zip(top_predictions.indices, top_predictions.values):
-            label = content_safety_model.config.id2label[idx.item()]
-            confidence = score.item()
+        # Different handling based on model type
+        if content_safety_model_type == "nsfw":
+            # NSFW model - check for inappropriate content
+            dangerous_keywords = [
+                "nsfw", "violence", "gore", "blood", "horror", "scary", "weapon",
+                "explicit", "inappropriate", "adult", "mature", "disturbing",
+                "porn", "sexual", "nude", "naked"
+            ]
             
-            # Check for dangerous content categories
-            dangerous_keywords = ["nsfw", "violence", "gore", "blood", "horror", "scary", "weapon"]
-            if any(keyword in label.lower() for keyword in dangerous_keywords):
-                if confidence > 0.3:  # 30% confidence threshold
-                    safety_flags.append(f"specialized model detected {label} (confidence: {confidence:.2f})")
+            for idx, score in zip(top_predictions.indices, top_predictions.values):
+                label = content_safety_model.config.id2label[idx.item()]
+                confidence = score.item()
+                
+                if any(keyword in label.lower() for keyword in dangerous_keywords):
+                    # Lower threshold for NSFW model (20% instead of 30%)
+                    if confidence > 0.2:
+                        safety_flags.append(f"specialized model detected {label} (confidence: {confidence:.2f})")
+        
+        elif content_safety_model_type == "clip":
+            # CLIP-based model - use text prompts for semantic understanding
+            try:
+                from transformers import CLIPProcessor, CLIPModel
+                
+                # Define dangerous text prompts
+                dangerous_prompts = [
+                    "violence", "gore", "blood", "horror scene", "scary image", "weapon",
+                    "inappropriate content", "disturbing imagery", "adult content",
+                    "monster", "zombie", "demon", "horror movie", "bloody scene",
+                    "violent scene", "horror character", "scary monster"
+                ]
+                
+                # Process image and text prompts
+                inputs = content_safety_processor(
+                    text=dangerous_prompts,
+                    images=image,
+                    return_tensors="pt",
+                    padding=True
+                )
+                
+                with torch.no_grad():
+                    outputs = content_safety_model(**inputs)
+                    # Get image-text similarity scores
+                    logits_per_image = outputs.logits_per_image
+                    probs = logits_per_image.softmax(dim=1)
+                
+                # Check each dangerous prompt
+                for i, prompt in enumerate(dangerous_prompts):
+                    score = probs[0][i].item()
+                    if score > 0.15:  # 15% threshold for CLIP (lower because it's semantic matching)
+                        safety_flags.append(f"CLIP detected '{prompt}' (confidence: {score:.2f})")
+                
+            except Exception as clip_err:
+                # Fallback: try pipeline approach
+                try:
+                    from transformers import pipeline
+                    classifier = pipeline("zero-shot-image-classification", 
+                                        model=content_safety_model,
+                                        device=-1)
+                    
+                    candidate_labels = [
+                        "violence", "gore", "blood", "horror", "scary", "weapon",
+                        "inappropriate content", "disturbing imagery", "adult content",
+                        "monster", "zombie", "demon", "horror movie scene"
+                    ]
+                    
+                    result = classifier(image, candidate_labels=candidate_labels)
+                    
+                    for item in result[:3]:
+                        label = item["label"].lower()
+                        score = item["score"]
+                        dangerous_keywords = [
+                            "violence", "gore", "blood", "horror", "scary", "weapon",
+                            "inappropriate", "disturbing", "adult", "monster", "zombie", "demon"
+                        ]
+                        if any(keyword in label for keyword in dangerous_keywords):
+                            if score > 0.25:
+                                safety_flags.append(f"specialized model detected {item['label']} (confidence: {score:.2f})")
+                except Exception as pipeline_err:
+                    print(f"⚠️ CLIP detection failed: {clip_err}, pipeline also failed: {pipeline_err}", file=sys.stderr)
+        else:
+            # Generic model - use standard approach
+            dangerous_keywords = [
+                "nsfw", "violence", "gore", "blood", "horror", "scary", "weapon",
+                "explicit", "inappropriate", "adult", "mature", "disturbing"
+            ]
+            
+            for idx, score in zip(top_predictions.indices, top_predictions.values):
+                label = content_safety_model.config.id2label[idx.item()]
+                confidence = score.item()
+                
+                if any(keyword in label.lower() for keyword in dangerous_keywords):
+                    if confidence > 0.2:  # 20% threshold for generic models
+                        safety_flags.append(f"specialized model detected {label} (confidence: {confidence:.2f})")
         
         return safety_flags
         
     except Exception as e:
         # If specialized model fails, return empty (fallback to YOLO)
         print(f"⚠️ Specialized model detection failed: {e}", file=sys.stderr)
+        import traceback
+        print(f"⚠️ Traceback: {traceback.format_exc()}", file=sys.stderr)
         return []
 
 # Get thumbnail URL from command line argument
@@ -374,6 +588,16 @@ try:
     specialized_flags = detect_content_safety_specialized(thumbnail_path)
     flags.extend(specialized_flags)
     
+    # 3. Fallback: Advanced blood/gore detection (if specialized model didn't catch it)
+    if len(specialized_flags) == 0:  # Only use fallback if specialized model found nothing
+        has_blood, blood_pct = detect_blood_gore_advanced(thumbnail_path)
+        if has_blood:
+            flags.append(f"blood/gore detected in thumbnail ({blood_pct:.1f}% red content)")
+    
+    # 4. Fallback: Horror scene detection
+    if detect_horror_scene(thumbnail_path):
+        flags.append("horror scene detected in thumbnail (dark, high contrast, red tint)")
+    
 except Exception as e:
     print(f"⚠️ Detection error: {e}", file=sys.stderr)
     pass
@@ -388,6 +612,12 @@ try:
 except:
     pass
 
-print(json.dumps(flags))
-sys.stdout.flush()
+try:
+	print(json.dumps(flags))
+	sys.stdout.flush()
+except (KeyboardInterrupt, BrokenPipeError):
+	# Graceful shutdown - output empty result
+	print("[]", file=sys.stdout)
+	sys.stdout.flush()
+	sys.exit(0)
 
