@@ -5,6 +5,7 @@ const cors = require("cors");
 const { dbHelpers } = require("./database");
 const { jsonParser, jsonErrorHandler, errorHandler } = require("./middleware");
 const { analyzeRoute } = require("./routes/analyze");
+const { validateRoute } = require("./routes/validate");
 const { rootRoute, healthRoute, notFoundRoute } = require("./routes/index");
 
 /** @type {import('express').Express} */
@@ -14,6 +15,7 @@ app.use(jsonParser());
 app.use(jsonErrorHandler);
 
 // Routes
+app.post("/validate", validateRoute);
 app.post("/analyze", analyzeRoute);
 app.get("/", rootRoute);
 app.get("/health", healthRoute);

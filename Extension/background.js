@@ -21,6 +21,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 			.catch(() => sendResponse({ success: false, healthy: false }));
 		return true; // Keep channel open for async response
 	}
+	
+	if (request.action === "validateVideo") {
+		validateVideo(request.videoId, request.url)
+			.then((result) => sendResponse({ success: true, data: result }))
+			.catch((error) => sendResponse({ success: false, error: error.message }));
+		return true; // Keep channel open for async response
+	}
 });
 
 // Check video safety via API
@@ -76,6 +83,41 @@ async function checkBackendHealth() {
 	} catch (error) {
 		console.warn("⚠️ Kidsafe backend is not reachable. Make sure it's running on http://localhost:4000");
 		return false;
+	}
+}
+
+// Validate video (check duration, Shorts, playlists) via API
+async function validateVideo(videoId, url) {
+	try {
+		const response = await fetch(`${BACKEND_URL}/validate`, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({ videoId, url }),
+		});
+
+		if (!response.ok) {
+			// Try to get error details from response body
+			let errorDetails = `HTTP error! status: ${response.status}`;
+			try {
+				const errorData = await response.json();
+				if (errorData.error || errorData.details || errorData.message) {
+					errorDetails = `${errorData.error || "Error"}: ${errorData.details || errorData.message || ""}`;
+				}
+			} catch (parseErr) {
+				// If we can't parse the error response, use the status text
+				errorDetails = `HTTP error! status: ${response.status} ${response.statusText || ""}`;
+			}
+			console.error("Kidsafe validation error:", errorDetails);
+			throw new Error(errorDetails);
+		}
+
+		const data = await response.json();
+		return data;
+	} catch (error) {
+		console.error("Kidsafe validation error:", error);
+		throw error;
 	}
 }
 

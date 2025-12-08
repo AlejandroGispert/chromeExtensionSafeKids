@@ -6,6 +6,7 @@ function rootRoute(req, res) {
 		service: "Kidsafe Backend",
 		version: "1.0.0",
 		endpoints: {
+			"POST /validate": "Validate a YouTube video (check duration, Shorts, playlists)",
 			"POST /analyze": "Analyze a YouTube video for safety",
 			"GET /health": "Health check endpoint",
 		},
@@ -23,6 +24,7 @@ function notFoundRoute(req, res) {
 		error: "Not Found",
 		message: `Cannot ${req.method} ${req.path}`,
 		endpoints: {
+			"POST /validate": "Validate a YouTube video (check duration, Shorts, playlists)",
 			"POST /analyze": "Analyze a YouTube video for safety",
 			"GET /health": "Health check endpoint",
 			"GET /": "API information",
